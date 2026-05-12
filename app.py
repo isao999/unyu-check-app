@@ -2,52 +2,62 @@ import streamlit as st
 import pandas as pd
 from pdf2image import convert_from_bytes
 import pytesseract
+from PIL import Image, ImageOps
 import re
 
-st.title("運送業務・照合ツール（完全無料クラウド版）")
+st.title("運送業務・照合ツール（丸伊運輸・専用版）")
 
-pdf_file = st.file_uploader("画像PDFをアップロード", type="pdf")
+pdf_file = st.file_uploader("点呼記録簿（PDF）をアップロード", type="pdf")
 csv_file = st.file_uploader("CSVファイルをアップロード", type="csv")
 
 if pdf_file and csv_file:
-    st.info("読み取り中...（精度を上げて読み込んでいるよ）")
+    st.info("解析中... 4桁の数字から『時刻』を探しています。")
 
     try:
-        # --- 1. PDFを画像にする（DPIを300に上げて精度をアップ！） ---
         images = convert_from_bytes(pdf_file.read(), dpi=300)
         all_text = ""
         
         for img in images:
-            # 日本語と英語の両方で読み取り
-            text = pytesseract.image_to_string(img, lang="jpn+eng")
+            img = img.convert('L')
+            img = ImageOps.autocontrast(img)
+            # OCR実行
+            text = pytesseract.image_to_string(img, lang="jpn+eng", config='--psm 6')
             all_text += text
             
-        st.subheader("PDFから見つかった時間")
-        # 00:00 形式の時間を探す（半角・全角両方対応できるよう工夫）
-        pdf_times = re.findall(r'\d{1,2}[:：]\d{2}', all_text)
+        st.subheader("PDFから抽出した時刻（推測）")
         
-        if pdf_times:
-            # 全角のコロンを半角に直して表示
-            clean_times = [t.replace('：', ':') for t in pdf_times]
-            st.write(clean_times)
+        # 【ここが重要！】4桁の数字（0000〜2359）を探すルール
+        # 12:34 形式だけでなく、1234 のような4桁も探す
+        found_patterns = re.findall(r'\b([012][0-9][:：\s\.]?[0-5][0-9])\b', all_text)
+        
+        if found_patterns:
+            # 記号を消して「12:34」の形に整える
+            times_list = []
+            for t in found_patterns:
+                clean_t = re.sub(r'[:：\s\.]', '', t)
+                if len(clean_t) == 4:
+                    # 時刻として妥当か（時が23以下、分が59以下）チェック
+                    hour = int(clean_t[:2])
+                    minute = int(clean_t[2:])
+                    if hour <= 23 and minute <= 59:
+                        times_list.append(f"{clean_t[:2]}:{clean_t[2:]}")
+            
+            # 重複を排除して表示
+            final_times = sorted(list(set(times_list)))
+            st.write(final_times)
         else:
-            st.warning("時間が見つからなかったよ。OCRの読み取り結果を確認してみて。")
-            with st.expander("OCRが読み取った生のテキストを見る"):
-                st.text(all_text)
+            st.warning("時刻が見つかりませんでした。")
+            
+        with st.expander("AIが読み取った生のテキスト（確認用）"):
+            st.text(all_text)
 
     except Exception as e:
-        st.error(f"PDFエラー: {e}")
+        st.error(f"解析エラー: {e}")
 
-    # --- 2. CSVの読み込み（Shift-JIS対策！） ---
+    # CSV読み込み（文字コード対策済み）
     try:
-        # 日本語WindowsのCSVは 'cp932' (Shift-JIS) を指定するのがコツ！
         df_csv = pd.read_csv(csv_file, encoding='cp932')
         st.subheader("CSVのデータ")
         st.write(df_csv.head())
-    except UnicodeDecodeError:
-        # もし cp932 でもダメなら utf-8 でリトライ
-        csv_file.seek(0)
-        df_csv = pd.read_csv(csv_file, encoding='utf-8')
-        st.write(df_csv.head())
     except Exception as e:
-        st.error(f"CSVエラー: {e}")
+        st.error(f"CSV読み込みエラー: {e}")

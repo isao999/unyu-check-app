@@ -1,0 +1,13 @@
+tesseract-ocr
+    tesseract-ocr-jpn
+    poppler-utils
+    ```
+
+---
+
+### これで確認してみて！
+この作業が終わったあと、GitHubのトップ画面に戻ったときに、**ファイルが3つ（app.py, requirements.txt, packages.txt）リストになって並んでるかな？**
+
+これさえ並んでいれば、ドラッグ＆ドロップができなくても「勝ち」だよ！
+
+この「直接入力」の方法なら、エラーやブロックは出なかったかな？

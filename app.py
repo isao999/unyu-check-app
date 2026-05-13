@@ -2,70 +2,74 @@ import streamlit as st
 import pandas as pd
 from pdf2image import convert_from_bytes
 import pytesseract
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFilter
 import re
 
-st.title("運送業務・照合ツール（丸伊運輸・高精度版）")
+st.title("運送業務・照合ツール（丸伊運輸・最終調整版）")
 
 pdf_file = st.file_uploader("点呼記録簿（PDF）をアップロード", type="pdf")
 csv_file = st.file_uploader("CSVファイルをアップロード", type="csv")
 
 if pdf_file and csv_file:
-    st.info("解析中... 記号に埋もれた数字を探しています。")
+    st.info("画像を加工して、薄い文字をクッキリさせて読み取っているよ...")
 
     try:
-        images = convert_from_bytes(pdf_file.read(), dpi=300)
+        # DPIを300以上にして読み込み
+        images = convert_from_bytes(pdf_file.read(), dpi=350)
         all_text = ""
         
         for img in images:
-            img = img.convert('L') # 白黒
-            img = ImageOps.autocontrast(img) # コントラスト強調
-            # 表形式に強い設定で読み込み
-            text = pytesseract.image_to_string(img, lang="jpn+eng", config='--psm 6')
+            # --- 画像処理：AIが読みやすいように加工 ---
+            img = img.convert('L') # グレースケール（白黒）
+            # 二値化（ある程度より薄い色は全部白、濃い色は全部黒にする）
+            img = img.point(lambda x: 0 if x < 150 else 255) 
+            
+            # --- OCR実行：PSM 11 (文字をバラバラに探すモード) ---
+            # 丸伊運輸さんの表形式には、6より11の方が効くことがあるよ
+            custom_config = r'--psm 11 -l jpn+eng'
+            text = pytesseract.image_to_string(img, config=custom_config)
             all_text += text
             
         st.subheader("PDFから見つかった時刻（候補）")
         
-        # --- 修正版：時刻探しのロジック ---
-        # 1. まず「数字以外のゴミ」を適度に無視して、数字の塊を探す
-        # 2. 3桁または4桁の数字をすべて抜き出す
-        raw_numbers = re.findall(r'\d{3,4}', all_text)
+        # --- 修正版：もっと強引に数字を探す ---
+        # 1. テキストから数字以外（記号や改行）を一度スペースに置き換える
+        clean_text = re.sub(r'[^0-9]', ' ', all_text)
+        # 2. 3桁または4桁の塊を全部抜き出す
+        raw_numbers = re.findall(r'\b\d{3,4}\b', clean_text)
         
         times_list = []
         for num in raw_numbers:
-            # 4桁の場合（例：1323）
+            # 4桁の場合（1323など）
             if len(num) == 4:
-                hour = int(num[:2])
-                minute = int(num[2:])
-            # 3桁の場合（例：856 → 08:56）
-            elif len(num) == 3:
-                hour = int(num[:1])
-                minute = int(num[1:])
+                h, m = int(num[:2]), int(num[2:])
+            # 3桁の場合（518など）
+            else:
+                h, m = int(num[:1]), int(num[1:])
             
-            # 時刻として妥当か（0〜23時、0〜59分）チェック
-            if hour <= 23 and minute <= 59:
-                # 446（4時46分）なども拾うため、念のためリストに追加
-                times_list.append(f"{hour:02d}:{minute:02d}")
+            # 時刻としてあり得る数字だけを採用
+            if h <= 23 and m <= 59:
+                times_list.append(f"{h:02d}:{m:02d}")
         
-        # 重複を消して、見やすく並べ替え
+        # 重複を消して、時間順に並べる
         final_times = sorted(list(set(times_list)))
 
         if final_times:
-            st.success(f"{len(final_times)}件の時刻候補が見つかったよ！")
+            st.success(f"{len(final_times)}件の候補を見つけたよ！")
             st.write(final_times)
         else:
-            st.warning("時刻が見つからなかったよ。")
+            st.warning("やっぱり見つからない...画像が薄すぎるかも？")
 
-        with st.expander("AIが読み取った生のテキスト（ここをチェック！）"):
+        with st.expander("AIが「加工後」に読み取った文字を確認"):
             st.text(all_text)
 
     except Exception as e:
-        st.error(f"解析エラー: {e}")
+        st.error(f"エラー: {e}")
 
     # CSV読み込み
     try:
         df_csv = pd.read_csv(csv_file, encoding='cp932')
-        st.subheader("CSVのデータ（照合対象）")
+        st.subheader("CSVのデータ（照合用）")
         st.write(df_csv.head())
     except Exception as e:
         st.error(f"CSV読み込みエラー: {e}")
